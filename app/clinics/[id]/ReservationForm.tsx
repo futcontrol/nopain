@@ -45,12 +45,15 @@ export default function ReservationForm() {
   const [userName, setUserName] = useState<string | null>(null)
   const [userId, setUserId] = useState<string | null>(null)
 
-  // 🧠 Obtener usuario autenticado al cargar (corregido)
+  // 🧠 Obtener usuario autenticado
   useEffect(() => {
     const fetchUser = async () => {
       const {
         data: { user },
       } = await supabase.auth.getUser()
+
+      // 🔍 Diagnóstico: mostrar en consola si hay usuario autenticado
+      console.log("🧠 Usuario autenticado:", user)
 
       if (user) {
         setUserEmail(user.email ?? null)
@@ -68,28 +71,27 @@ export default function ReservationForm() {
       }
     }
     fetchUser()
-  }, [])
+  }, [supabase])
 
   // 🩺 Cargar fisioterapeutas de la clínica
   useEffect(() => {
     const fetchPhysios = async () => {
       if (!clinicId) return
+
       const { data, error } = await supabase
         .from("physiotherapists")
         .select("id, name")
         .eq("clinic_id", clinicId)
-        .eq("active", true)
 
-      if (error && Object.keys(error).length > 0) {
+      if (error) {
         console.error("❌ Error cargando fisioterapeutas:", error)
       } else {
-        console.log("✅ Fisioterapeutas cargados:", data)
         setPhysios(data || [])
       }
     }
 
     fetchPhysios()
-  }, [clinicId])
+  }, [clinicId, supabase])
 
   // 💾 Crear reserva vinculada al usuario autenticado
   const handleReservation = async () => {
@@ -113,36 +115,49 @@ export default function ReservationForm() {
 
     try {
       setLoading(true)
+
       const { error } = await supabase.from("reservas").insert([
         {
           user_id: userId,
           user_email: userEmail,
           user_name: userName,
           clinic_id: clinicId,
-          date: selectedDate.toISOString(),
+          date: selectedDate.toISOString().split("T")[0], // ✅ formato YYYY-MM-DD
           time,
           physio_id: selectedPhysio,
+          status: "pending", // ✅ coincide con la tabla
         },
       ])
 
-      if (error) throw error
+      if (error) {
+        console.error("❌ Error al crear la reserva:", error.message || error)
+        toast({
+          title: "Error al crear la reserva",
+          description:
+            error.message ||
+            "No se pudo guardar la cita. Revisa las columnas en Supabase.",
+          variant: "destructive",
+        })
+        return
+      }
 
       toast({
         title: "✅ Reserva creada correctamente",
         description: "Tu cita se ha guardado en tu panel de reservas.",
       })
 
+      // Reset y cierre del modal
       setOpen(false)
       setSelectedDate(undefined)
       setTime("")
       setSelectedPhysio("")
     } catch (err: any) {
+      console.error("⚠️ Error inesperado:", err.message || err)
       toast({
-        title: "❌ Error al crear la reserva",
-        description: err.message,
+        title: "Error inesperado",
+        description: err.message || "Revisa la consola para más detalles.",
         variant: "destructive",
       })
-      console.error(err)
     } finally {
       setLoading(false)
     }

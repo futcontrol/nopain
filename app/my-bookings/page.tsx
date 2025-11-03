@@ -7,15 +7,26 @@ import { Button } from "@/components/ui/button"
 import { useToast } from "@/components/ui/use-toast"
 import { motion, AnimatePresence } from "framer-motion"
 import { useRouter } from "next/navigation"
+import { Loader2 } from "lucide-react"
+
+type Booking = {
+  id: string
+  date: string
+  time: string
+  ends_at?: string | null
+  status?: string
+  clinic_id: string
+  physio_id: string
+  clinic?: { name: string; address?: string }
+  physio?: { name: string }
+}
 
 export default function MyBookingsPage() {
   const supabase = createClient()
   const { toast } = useToast()
   const router = useRouter()
 
-  const [bookings, setBookings] = useState<any[]>([])
-  const [clinics, setClinics] = useState<any[]>([])
-  const [physios, setPhysios] = useState<any[]>([])
+  const [bookings, setBookings] = useState<Booking[]>([])
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<any>(null)
 
@@ -25,59 +36,49 @@ export default function MyBookingsPage() {
       const {
         data: { user },
       } = await supabase.auth.getUser()
-      if (!user) {
-        router.push("/login")
-      } else {
-        setUser(user)
-      }
+      if (!user) router.push("/login")
+      else setUser(user)
     }
     fetchUser()
   }, [router, supabase])
 
-  // 🔹 Cargar datos del usuario autenticado
+  // 📦 Cargar reservas del usuario y unir con clínica/fisio
   useEffect(() => {
-    const fetchAll = async () => {
+    const fetchBookings = async () => {
       if (!user) return
+      setLoading(true)
 
       try {
-        // 1️⃣ Reservas del usuario logueado
         const { data: reservas, error: reservasError } = await supabase
           .from("reservas")
-          .select(
-            "id, date, time, ends_at, status, clinic_id, physio_id, user_name"
-          )
+          .select("id, date, time, ends_at, status, clinic_id, physio_id")
           .eq("user_id", user.id)
           .order("date", { ascending: true })
 
         if (reservasError) throw reservasError
 
-        // 2️⃣ Clínicas
-        const { data: clinicsData, error: clinicsError } = await supabase
-          .from("clinics")
-          .select("id, name, location")
-        if (clinicsError) throw clinicsError
+        // Cargar clínicas y fisios solo una vez
+        const [clinicsRes, physiosRes] = await Promise.all([
+          supabase.from("clinics").select("id, name, address"),
+          supabase.from("physiotherapists").select("id, name, clinic_id"),
+        ])
 
-        // 3️⃣ Fisios
-        const { data: physioData, error: physioError } = await supabase
-          .from("physiotherapists")
-          .select("id, name, clinic_id")
-        if (physioError) throw physioError
+        if (clinicsRes.error) throw clinicsRes.error
+        if (physiosRes.error) throw physiosRes.error
 
-        // 4️⃣ Combinar datos manualmente
+        // Combinar datos
         const fullData = reservas.map((r) => ({
           ...r,
-          clinic: clinicsData?.find((c) => c.id === r.clinic_id),
-          physio: physioData?.find((p) => p.id === r.physio_id),
+          clinic: clinicsRes.data?.find((c) => c.id === r.clinic_id),
+          physio: physiosRes.data?.find((p) => p.id === r.physio_id),
         }))
 
         setBookings(fullData)
-        setClinics(clinicsData)
-        setPhysios(physioData)
       } catch (err) {
-        console.error("Error al obtener reservas:", err)
+        console.error("❌ Error al cargar reservas:", err)
         toast({
-          title: "Error",
-          description: "No se pudieron cargar tus reservas.",
+          title: "Error al cargar reservas",
+          description: "Ha ocurrido un problema al obtener tus citas.",
           variant: "destructive",
         })
       } finally {
@@ -85,31 +86,38 @@ export default function MyBookingsPage() {
       }
     }
 
-    fetchAll()
-  }, [user])
+    fetchBookings()
+  }, [user, supabase, toast])
 
   // 🔹 Cancelar reserva
   const handleCancel = async (id: string) => {
-    const { error } = await supabase
-      .from("reservas")
-      .update({ status: "cancelled" })
-      .eq("id", id)
+    try {
+      const { error } = await supabase
+        .from("reservas")
+        .update({ status: "cancelled" })
+        .eq("id", id)
 
-    if (error) {
-      toast({ title: "Error", description: "No se pudo cancelar la cita." })
-    } else {
+      if (error) throw error
+
       setBookings((prev) =>
         prev.map((b) => (b.id === id ? { ...b, status: "cancelled" } : b))
       )
+
       toast({
         title: "Cita cancelada",
         description: "Tu reserva ha sido anulada correctamente.",
       })
+    } catch (err: any) {
+      toast({
+        title: "Error al cancelar",
+        description: err.message || "No se pudo cancelar la cita.",
+        variant: "destructive",
+      })
     }
   }
 
-  // 🔹 Color por estado
-  const getStatusColor = (status: string) => {
+  // 🔸 Color por estado
+  const getStatusColor = (status?: string) => {
     switch (status) {
       case "pending":
         return "bg-yellow-100 text-yellow-700 border-yellow-300"
@@ -124,9 +132,13 @@ export default function MyBookingsPage() {
     }
   }
 
-  if (loading) {
-    return <p className="text-center mt-10">Cargando tus reservas...</p>
-  }
+  // 🌀 Loading
+  if (loading)
+    return (
+      <div className="flex justify-center items-center h-64">
+        <Loader2 className="animate-spin text-muted-foreground w-6 h-6" />
+      </div>
+    )
 
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">
@@ -173,7 +185,7 @@ export default function MyBookingsPage() {
                       {b.clinic?.name || "Clínica"}
                     </CardTitle>
                     <p className="text-sm text-muted-foreground">
-                      📍 {b.clinic?.location || "Ubicación desconocida"}
+                      📍 {b.clinic?.address || "Ubicación desconocida"}
                     </p>
                   </div>
                   <span
@@ -181,23 +193,23 @@ export default function MyBookingsPage() {
                       b.status
                     )}`}
                   >
-                    {b.status.toUpperCase()}
+                    {b.status?.toUpperCase() || "PENDIENTE"}
                   </span>
                 </CardHeader>
 
                 <CardContent className="space-y-2">
                   <p>
                     <strong>Fisioterapeuta:</strong>{" "}
-                    {b.physio?.name || "—"}
+                    {b.physio?.name || "Sin asignar"}
                   </p>
                   <p>
                     <strong>Fecha:</strong>{" "}
                     {new Date(b.date).toLocaleDateString("es-ES")}
                   </p>
                   <p>
-                    <strong>Hora:</strong> {b.time}{" "}
+                    <strong>Hora:</strong> {b.time}
                     {b.ends_at
-                      ? `— ${new Date(b.ends_at).toLocaleTimeString("es-ES", {
+                      ? ` — ${new Date(b.ends_at).toLocaleTimeString("es-ES", {
                           hour: "2-digit",
                           minute: "2-digit",
                         })}`
